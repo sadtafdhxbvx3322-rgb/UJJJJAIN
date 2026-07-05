@@ -1221,8 +1221,8 @@ export default function App() {
                   <input type="text" placeholder="PHONE" className="luxury-input" />
                 </div>
                 <div style={{ position: 'relative' }}>
-                  <select className="luxury-input" style={{ appearance: 'none', cursor: 'pointer', color: '#fff' }}>
-                    <option value="" disabled selected style={{ color: '#333' }}>SELECT EXPERIENCE</option>
+                 <select className="luxury-input" defaultValue="" style={{ appearance: 'none', cursor: 'pointer', color: '#fff' }}>
+                    <option value="" disabled style={{ color: '#333' }}>SELECT EXPERIENCE</option>
                     <option value="vip" style={{ color: '#333' }}>VIP Darshan & Stay</option>
                     <option value="bhasma" style={{ color: '#333' }}>Bhasma Aarti Guarantee</option>
                     <option value="full" style={{ color: '#333' }}>Complete Luxury Pilgrimage</option>
