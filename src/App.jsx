@@ -2,14 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 
 /* ============================================================================
-   UJJAIN BRAHMAN — Cinematic Presentation Prototype
-   Lead build: single-file WebGL experience, custom GLSL, FBO bloom compositor,
-   GPU-instanced particle fields, scroll-hijacked camera rig.
+   UJJAIN BRAHMAN — Cinematic Presentation Prototype (Mobile Safe)
    ========================================================================== */
-
-/* ---------------------------------------------------------------------------
-   SHADER SOURCE LIBRARY
---------------------------------------------------------------------------- */
 
 const NOISE_GLSL = `
   vec3 mod289(vec3 x){return x - floor(x * (1.0/289.0)) * 289.0;}
@@ -106,12 +100,10 @@ const DEITY_VERT = `
   void main() {
     vec3 pos = position;
     vec3 n = normalize(normal);
-
     float slowTime = uTime * 0.15;
     float noiseA = fbm(pos * 1.4 + vec3(0.0, slowTime, 0.0), 4);
     float noiseB = fbm(pos * 3.1 - vec3(slowTime * 0.6, 0.0, 0.0), 3) * 0.35;
     float breathing = sin(uTime * 0.6) * 0.06 + sin(uTime * 0.37) * 0.03;
-
     float displacement = (noiseA + noiseB) * 0.22 * uIntensity + breathing;
     pos += n * displacement;
 
@@ -210,9 +202,7 @@ const PARTICLE_VERT = `
 
   void main(){
     vType = aType;
-
     float t = uTime * aSpeed + aPhase * 6.2831;
-
     vec3 p = aOrigin;
 
     float riseSpeed = mix(0.15, 0.5, aType == 2.0 ? 1.0 : 0.0);
@@ -344,7 +334,6 @@ const COMPOSITE_FRAG = `
     color += grain;
 
     color = pow(color, vec3(0.9545));
-
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -369,7 +358,6 @@ const GROUND_FRAG = `
     rings = pow(rings, 2.0);
 
     float glow = smoothstep(1.0, 0.0, d) * 0.5;
-
     float alpha = (rings * 0.6 + glow) * smoothstep(1.0, 0.55, d) * 0.9;
     gl_FragColor = vec4(uColor, alpha);
   }
@@ -418,13 +406,13 @@ class CinematicScene {
     this.targetScrollProgress = 0;
     this.mouse = new THREE.Vector2(0, 0);
     this.targetMouse = new THREE.Vector2(0, 0);
-    this.quality = window.innerWidth < 768 ? "low" : "high";
+    this.isMobile = window.innerWidth < 768;
     this.introProgress = 0;
     this.disposed = false;
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: false, // Turned off to save mobile GPU
       alpha: false,
       powerPreference: "high-performance",
       preserveDrawingBuffer: false,
@@ -459,20 +447,16 @@ class CinematicScene {
   _buildLights() {
     const ambient = new THREE.AmbientLight(0x1a1408, 1.2);
     this.scene.add(ambient);
-
     const key = new THREE.DirectionalLight(0xffd39a, 2.2);
     key.position.set(4, 5, 3);
     this.scene.add(key);
-
     const rim = new THREE.DirectionalLight(0x3a5cff, 0.5);
     rim.position.set(-5, -2, -4);
     this.scene.add(rim);
-
     const fillPoint = new THREE.PointLight(0xffab5e, 3.5, 12, 2);
     fillPoint.position.set(0, -1.2, 2.5);
     this.scene.add(fillPoint);
     this.fillPoint = fillPoint;
-
     this.keyLight = key;
     this.rimLight = rim;
     this._keyBasePos = key.position.clone();
@@ -480,7 +464,7 @@ class CinematicScene {
   }
 
   _buildDeity() {
-    const segs = this.quality === "high" ? 64 : 32;
+    const segs = this.isMobile ? 32 : 64;
     const geometry = new THREE.IcosahedronGeometry(1.35, segs > 40 ? 6 : 4);
     const material = new THREE.ShaderMaterial({
       vertexShader: DEITY_VERT,
@@ -539,14 +523,14 @@ class CinematicScene {
   }
 
   _buildParticles() {
-    const count = this.quality === "high" ? 7000 : 2200;
+    const count = this.isMobile ? 1500 : 7000;
     const geometry = buildParticleField(count);
     const material = new THREE.ShaderMaterial({
       vertexShader: PARTICLE_VERT,
       fragmentShader: PARTICLE_FRAG,
       uniforms: {
         uTime: { value: 0 },
-        uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+        uPixelRatio: { value: this.isMobile ? 1 : Math.min(window.devicePixelRatio, 2) },
         uMouse: { value: new THREE.Vector3(10, 10, 10) },
         uSpread: { value: 1.0 },
         uColorEmber: { value: new THREE.Color(0xff7a3c) },
@@ -562,15 +546,19 @@ class CinematicScene {
   }
 
   _buildComposer() {
-    const w = Math.max(1, window.innerWidth);
-    const h = Math.max(1, window.innerHeight);
+    // FIX 1: Safely lower resolution for mobile RenderTargets so GPUs don't crash (OOM)
+    const dpr = this.isMobile ? 1 : Math.min(window.devicePixelRatio, 2);
+    const w = Math.floor(window.innerWidth * dpr);
+    const h = Math.floor(window.innerHeight * dpr);
+    
+    // FIX 2: Use UnsignedByteType instead of HalfFloatType to ensure support on all phones
     const opts = {
-  minFilter: THREE.LinearFilter,
-  magFilter: THREE.LinearFilter,
-  format: THREE.RGBAFormat,
-  type: THREE.HalfFloatType, // <--- THIS IS CRASHING YOUR PHONE
-};
-
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+    };
+    
     this.rtScene = new THREE.WebGLRenderTarget(w, h, opts);
     this.rtBright = new THREE.WebGLRenderTarget(w, h, opts);
     this.rtBlurA = new THREE.WebGLRenderTarget(w, h, opts);
@@ -621,15 +609,20 @@ class CinematicScene {
   _resize = () => {
     const w = window.innerWidth;
     const h = window.innerHeight;
+    this.isMobile = w < 768;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    
+    const dpr = this.isMobile ? 1 : Math.min(window.devicePixelRatio, 2);
+    this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h);
 
+    const rw = Math.floor(w * dpr);
+    const rh = Math.floor(h * dpr);
     [this.rtScene, this.rtBright, this.rtBlurA, this.rtBlurB].forEach((rt) =>
-      rt.setSize(w, h)
+      rt.setSize(rw, rh)
     );
-    this.blurMat.uniforms.uResolution.value.set(w, h);
+    this.blurMat.uniforms.uResolution.value.set(rw, rh);
   };
 
   setScroll(progress) {
@@ -653,7 +646,6 @@ class CinematicScene {
     this.mouse.lerp(this.targetMouse, dt * 5.0);
 
     const introEased = 1.0 - Math.pow(1.0 - this.introProgress, 3.0);
-
     const theta = this.mouse.x * 0.4 + this.scrollProgress * Math.PI * 2.5;
     const phi = (this.mouse.y * 0.3) + 0.3 - (this.scrollProgress * 0.8);
 
@@ -759,7 +751,7 @@ class CinematicScene {
 }
 
 /* ============================================================================
-   UJJAIN BRAHMAN — Brand & UI Layer (VIP Luxury Pilgrimage)
+   REACT UI
    ========================================================================== */
 
 const INJECTED_CSS = `
@@ -776,7 +768,7 @@ const INJECTED_CSS = `
     --sanskrit-color: rgba(255, 255, 255, 0.015);
   }
 
-  * { box-sizing: border-box; cursor: none; }
+  * { box-sizing: border-box; }
   
   body, html {
     margin: 0; padding: 0;
@@ -789,7 +781,6 @@ const INJECTED_CSS = `
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Architectural Grid Lines */
   .grid-overlay {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     pointer-events: none; z-index: 1;
@@ -801,29 +792,11 @@ const INJECTED_CSS = `
     -webkit-mask-image: radial-gradient(circle at center, black 25%, transparent 100%);
   }
 
-  /* Custom Cursor */
-  .custom-cursor {
-    position: fixed; top: 0; left: 0; width: 30px; height: 30px;
-    border: 1px solid var(--gold); border-radius: 50%;
-    transform: translate(-50%, -50%); pointer-events: none; z-index: 10000;
-    transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1), height 0.4s cubic-bezier(0.16, 1, 0.3, 1), background 0.4s;
-    display: flex; justify-content: center; align-items: center;
-    mix-blend-mode: difference;
-  }
-  .custom-cursor::after {
-    content: ''; width: 4px; height: 4px; background: var(--gold); border-radius: 50%;
-  }
-  .custom-cursor.hover {
-    width: 75px; height: 75px; background: rgba(212, 175, 106, 0.08); backdrop-filter: blur(1px);
-    border-color: rgba(212, 175, 106, 0.5);
-  }
-
   ::-webkit-scrollbar { display: none; }
 
   .font-cinzel { font-family: 'Cinzel', serif; }
   .font-sanskrit { font-family: 'Noto Serif Devanagari', serif; }
   
-  /* Ultra-Premium Glassmorphism */
   .glass-panel {
     background: var(--glass-bg);
     backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
@@ -837,16 +810,9 @@ const INJECTED_CSS = `
     background: rgba(12, 8, 6, 0.6);
     box-shadow: 0 50px 100px rgba(0,0,0,0.95), inset 0 1px 0 rgba(212, 175, 106, 0.5);
   }
-  .glass-panel::after {
-    content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
-    background: radial-gradient(circle at center, var(--gold-dim) 0%, transparent 45%);
-    opacity: 0; pointer-events: none; transition: opacity 0.6s ease;
-  }
-  .glass-panel:hover::after { opacity: 0.12; }
 
   .text-glow { text-shadow: 0 0 45px var(--gold-glow); }
   
-  /* Magnetic CTA Button */
   .magnetic-btn {
     position: relative; display: inline-flex; align-items: center; justify-content: center;
     padding: 22px 55px; background: rgba(0,0,0,0.5); color: var(--gold);
@@ -855,6 +821,7 @@ const INJECTED_CSS = `
     letter-spacing: 5px; text-transform: uppercase; overflow: hidden; 
     transition: all 0.6s cubic-bezier(0.7, 0, 0.2, 1);
     border-radius: 2px;
+    cursor: pointer;
   }
   .magnetic-btn::before {
     content: ''; position: absolute; top: 100%; left: 0; width: 100%; height: 100%;
@@ -863,40 +830,32 @@ const INJECTED_CSS = `
   .magnetic-btn:hover { color: var(--dark); box-shadow: 0 0 35px var(--gold-glow); border-color: transparent; }
   .magnetic-btn:hover::before { transform: translateY(-100%); }
 
-  /* WhatsApp FAB */
   .wa-fab {
-    position: fixed; bottom: 45px; right: 45px; width: 65px; height: 65px;
+    position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px;
     background: rgba(37, 211, 102, 0.15); border: 1px solid rgba(37, 211, 102, 0.4);
     border-radius: 50%; display: flex; justify-content: center; align-items: center;
     z-index: 999; backdrop-filter: blur(15px); box-shadow: 0 0 25px rgba(37, 211, 102, 0.15);
-    transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1); text-decoration: none; color: #25d366;
+    transition: all 0.5s ease; text-decoration: none; color: #25d366;
   }
   .wa-fab:hover { background: #25d366; color: white; transform: scale(1.08); box-shadow: 0 0 40px rgba(37, 211, 102, 0.5); border-color: #25d366; }
 
-  /* Watermarks & Animations */
   .sanskrit-watermark {
     position: absolute; top: 0; font-size: 20vw; line-height: 1;
     color: var(--sanskrit-color); writing-mode: vertical-rl; text-orientation: upright;
     user-select: none; pointer-events: none; white-space: nowrap; z-index: -1;
   }
-  .fade-in { opacity: 1; transform: translateY(0); transition: all 1.8s cubic-bezier(0.16, 1, 0.3, 1); }
-  .fade-out { opacity: 0; transform: translateY(60px); transition: all 1.8s cubic-bezier(0.16, 1, 0.3, 1); }
+  .fade-in { opacity: 1; transform: translateY(0); transition: all 1.8s ease; }
+  .fade-out { opacity: 0; transform: translateY(60px); transition: all 1.8s ease; }
 
-  /* Trust Badges */
   .trust-badges { display: flex; gap: 3rem; align-items: center; margin-top: 3.5rem; opacity: 0.85; }
   .trust-badge { display: flex; align-items: center; gap: 12px; font-size: 0.65rem; font-weight: 500; letter-spacing: 3px; text-transform: uppercase; color: #b3b3b3; }
   
-  /* Services Grid */
   .service-item { display: flex; align-items: center; gap: 20px; padding: 20px 0; border-bottom: 1px solid rgba(212, 175, 106, 0.15); transition: background 0.3s; }
   .service-item:hover { background: linear-gradient(90deg, rgba(212, 175, 106, 0.05), transparent); }
   .service-icon { width: 45px; height: 45px; border: 1px solid var(--gold-dim); border-radius: 50%; display: flex; justify-content: center; align-items: center; color: var(--gold); box-shadow: inset 0 0 10px rgba(212,175,106,0.1); }
 
-  /* Elegant Divider */
-  .luxury-divider {
-    width: 100%; height: 1px; background: linear-gradient(90deg, transparent, var(--gold-dim), transparent); margin: 2rem 0;
-  }
+  .luxury-divider { width: 100%; height: 1px; background: linear-gradient(90deg, transparent, var(--gold-dim), transparent); margin: 2rem 0; }
 
-  /* Form Inputs */
   .luxury-input {
     width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--glass-border);
     padding: 15px 0; color: white; font-family: 'Montserrat', sans-serif; font-size: 0.85rem; font-weight: 300;
@@ -904,10 +863,10 @@ const INJECTED_CSS = `
   }
   .luxury-input:focus { border-bottom-color: var(--gold); }
   .luxury-input::placeholder { color: rgba(255,255,255,0.3); }
+  .luxury-input option { color: #000; }
 
-  /* Mobile Responsiveness */
   @media (max-width: 1024px) {
-    .glass-panel { padding: 3.5rem 2.5rem !important; }
+    .glass-panel { padding: 2.5rem 1.5rem !important; }
     .hero-title { font-size: 9vw !important; }
     .packages-container { flex-direction: column; gap: 2.5rem; }
     .sanskrit-watermark { display: none; }
@@ -921,39 +880,9 @@ const INJECTED_CSS = `
   }
 `;
 
-// Advanced Cursor Component
-const CustomCursor = () => {
-  const cursorRef = useRef(null);
-  useEffect(() => {
-    const moveCursor = (e) => {
-      if (cursorRef.current) cursorRef.current.style.transform = `translate(calc(${e.clientX}px - 50%), calc(${e.clientY}px - 50%))`;
-    };
-    const handleHover = (e) => {
-      if (['A', 'BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.closest('.magnetic-btn, .service-item, .glass-panel, .gallery-card')) {
-        cursorRef.current?.classList.add('hover');
-      } else {
-        cursorRef.current?.classList.remove('hover');
-      }
-    };
-    window.addEventListener('mousemove', moveCursor);
-    window.addEventListener('mouseover', handleHover);
-    return () => { window.removeEventListener('mousemove', moveCursor); window.removeEventListener('mouseover', handleHover); };
-  }, []);
-  return <div ref={cursorRef} className="custom-cursor" />;
-};
-
 const MagneticButton = ({ children, onClick, className = "", style = {} }) => {
-  const btnRef = useRef(null);
-  const handleMouseMove = (e) => {
-    const btn = btnRef.current; if (!btn) return;
-    const rect = btn.getBoundingClientRect();
-    const x = e.clientX - rect.left - rect.width / 2;
-    const y = e.clientY - rect.top - rect.height / 2;
-    btn.style.transform = `translate(${x * 0.35}px, ${y * 0.35}px)`;
-  };
-  const handleMouseLeave = () => { if (btnRef.current) btnRef.current.style.transform = `translate(0px, 0px)`; };
   return (
-    <button ref={btnRef} className={`magnetic-btn ${className}`} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave} onClick={onClick} style={style}>
+    <button className={`magnetic-btn ${className}`} onClick={onClick} style={style}>
       {children}
     </button>
   );
@@ -972,12 +901,12 @@ const Loader = ({ onComplete }) => {
     <div style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--dark)', zIndex: 9999,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      opacity: phase === 3 ? 0 : 1, transition: 'opacity 1.8s cubic-bezier(0.16, 1, 0.3, 1)', pointerEvents: 'none'
+      opacity: phase === 3 ? 0 : 1, transition: 'opacity 1.8s ease', pointerEvents: 'none'
     }}>
-      <div style={{ opacity: phase >= 1 ? 1 : 0, transform: phase >= 1 ? 'scale(1)' : 'scale(0.85)', transition: 'all 2.2s cubic-bezier(0.16, 1, 0.3, 1)' }}>
+      <div style={{ opacity: phase >= 1 ? 1 : 0, transform: phase >= 1 ? 'scale(1)' : 'scale(0.85)', transition: 'all 2.2s ease' }}>
         <div className="font-sanskrit text-glow" style={{ fontSize: '6.5rem', color: 'var(--gold)', fontWeight: 300 }}>ॐ</div>
       </div>
-      <div style={{ marginTop: '2.5rem', opacity: phase >= 2 ? 1 : 0, transform: phase >= 2 ? 'translateY(0)' : 'translateY(25px)', transition: 'all 1.8s cubic-bezier(0.16, 1, 0.3, 1)', textAlign: 'center' }}>
+      <div style={{ marginTop: '2.5rem', opacity: phase >= 2 ? 1 : 0, transform: phase >= 2 ? 'translateY(0)' : 'translateY(25px)', transition: 'all 1.8s ease', textAlign: 'center' }}>
         <h1 className="font-cinzel" style={{ color: '#fff', letterSpacing: '10px', fontSize: '1.3rem', margin: 0, fontWeight: 500 }}>UJJAIN BRAHMAN</h1>
         <div style={{ height: '1px', width: '30px', background: 'var(--gold)', margin: '1rem auto' }} />
         <p style={{ color: 'var(--gold)', letterSpacing: '4px', fontSize: '0.65rem', textTransform: 'uppercase', marginTop: '10px', fontWeight: 400 }}>Luxury Spiritual Experiences</p>
@@ -990,20 +919,18 @@ const Navbar = ({ scrollProgress }) => {
   const isScrolled = scrollProgress > 0.02;
   return (
     <nav style={{
-      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: isScrolled ? '1.8rem 5vw' : '2.8rem 6vw',
-      transition: 'all 0.8s cubic-bezier(0.16, 1, 0.3, 1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, padding: isScrolled ? '1.5rem 5vw' : '2.5rem 5vw',
+      transition: 'all 0.8s ease', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       background: isScrolled ? 'rgba(7, 5, 4, 0.85)' : 'transparent', backdropFilter: isScrolled ? 'blur(25px)' : 'none',
       borderBottom: isScrolled ? '1px solid rgba(212, 175, 106, 0.15)' : '1px solid transparent'
     }}>
       <div className="font-cinzel" style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer' }}>
-        <span style={{ color: 'white', fontSize: '1.2rem', letterSpacing: '5px', fontWeight: 700 }}>UJJAIN BRAHMAN</span>
+        <span style={{ color: 'white', fontSize: '1.1rem', letterSpacing: '4px', fontWeight: 700 }}>UJJAIN BRAHMAN</span>
       </div>
-      <div style={{ display: 'flex', gap: '3.5rem', fontSize: '0.65rem', letterSpacing: '3px', textTransform: 'uppercase', fontWeight: 500 }} className="nav-links">
-        {['Experiences', 'Curations', 'Reservations'].map(item => (
-          <span key={item} style={{ color: '#d9d9d9', transition: 'color 0.4s' }} onMouseEnter={e => e.currentTarget.style.color = 'var(--gold)'} onMouseLeave={e => e.currentTarget.style.color = '#d9d9d9'}>{item}</span>
-        ))}
+      <div style={{ display: 'none', gap: '3rem', fontSize: '0.65rem', letterSpacing: '3px', textTransform: 'uppercase', fontWeight: 500 }} className="nav-links">
+        {/* Desktop links hidden on mobile for cleaner view */}
       </div>
-      <MagneticButton style={{ padding: '12px 28px', fontSize: '0.65rem', letterSpacing: '3px' }}>Enquire Now</MagneticButton>
+      <MagneticButton style={{ padding: '10px 20px', fontSize: '0.6rem', letterSpacing: '2px' }}>Enquire</MagneticButton>
     </nav>
   );
 };
@@ -1017,30 +944,53 @@ export default function App() {
   useEffect(() => {
     if (!canvasRef.current) return;
     if (!document.getElementById('uba-styles')) {
-      const styleSheet = document.createElement("style"); styleSheet.id = 'uba-styles'; styleSheet.innerText = INJECTED_CSS; document.head.appendChild(styleSheet);
+      const styleSheet = document.createElement("style"); 
+      styleSheet.id = 'uba-styles'; 
+      styleSheet.innerText = INJECTED_CSS; 
+      document.head.appendChild(styleSheet);
     }
-    const scene = new CinematicScene(canvasRef.current); scene.render(); sceneRef.current = scene;
+    
+    try {
+      const scene = new CinematicScene(canvasRef.current); 
+      scene.render(); 
+      sceneRef.current = scene;
+    } catch (e) {
+      console.error("WebGL Initialization failed", e);
+    }
 
     const handleScroll = () => {
       const maxScroll = document.body.scrollHeight - window.innerHeight;
-      const progress = Math.max(0, Math.min(1, window.scrollY / maxScroll));
-      setScrollProgress(progress); scene.setScroll(progress);
+      const progress = Math.max(0, Math.min(1, window.scrollY / (maxScroll || 1)));
+      setScrollProgress(progress); 
+      if(sceneRef.current) sceneRef.current.setScroll(progress);
     };
+    
     const handleMouseMove = (e) => {
-      const x = (e.clientX / window.innerWidth) * 2 - 1; const y = -(e.clientY / window.innerHeight) * 2 + 1;
-      scene.setMouse(x, y);
+      const x = (e.clientX / window.innerWidth) * 2 - 1; 
+      const y = -(e.clientY / window.innerHeight) * 2 + 1;
+      if(sceneRef.current) sceneRef.current.setMouse(x, y);
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     window.addEventListener('mousemove', handleMouseMove);
-    return () => { window.removeEventListener('scroll', handleScroll); window.removeEventListener('mousemove', handleMouseMove); scene.dispose(); };
+    return () => { 
+      window.removeEventListener('scroll', handleScroll); 
+      window.removeEventListener('mousemove', handleMouseMove); 
+      if(sceneRef.current) sceneRef.current.dispose(); 
+    };
   }, []);
 
   useEffect(() => {
     if (!loading && sceneRef.current) {
       let introVal = 0; let req;
-      const animateIntro = () => { introVal += 0.004; if (introVal > 1) introVal = 1; sceneRef.current.setIntro(introVal); if (introVal < 1) req = requestAnimationFrame(animateIntro); };
-      req = requestAnimationFrame(animateIntro); return () => cancelAnimationFrame(req);
+      const animateIntro = () => { 
+        introVal += 0.004; 
+        if (introVal > 1) introVal = 1; 
+        if(sceneRef.current) sceneRef.current.setIntro(introVal); 
+        if (introVal < 1) req = requestAnimationFrame(animateIntro); 
+      };
+      req = requestAnimationFrame(animateIntro); 
+      return () => cancelAnimationFrame(req);
     }
   }, [loading]);
 
@@ -1048,12 +998,10 @@ export default function App() {
 
   return (
     <>
-      <CustomCursor />
       {loading && <Loader onComplete={() => setLoading(false)} />}
       
-      {/* Background WebGL Engine */}
       <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: -1 }}>
-        <canvas ref={canvasRef} style={{ display: 'block' }} />
+        <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: '100%' }} />
       </div>
 
       <div className="grid-overlay" />
@@ -1073,30 +1021,26 @@ export default function App() {
           <div className={`hero-content ${getSectionClass(0, 0.15)}`} style={{
             position: 'absolute', top: '50%', left: '10vw', transform: 'translateY(-50%)', maxWidth: '850px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '2rem', flexWrap: 'wrap' }}>
               <div style={{ width: '50px', height: '1px', background: 'var(--gold)' }} />
               <span style={{ color: 'var(--gold)', letterSpacing: '6px', fontSize: '0.75rem', textTransform: 'uppercase', fontWeight: 600 }}>Luxury Spiritual Experiences</span>
             </div>
             <h2 className="font-cinzel text-glow hero-title" style={{ fontSize: '4.8vw', margin: 0, lineHeight: 1.15, color: 'white', fontWeight: 800 }}>
               THE DIVINE ENCOUNTER <br/><span style={{ color: 'var(--gold)' }}>PERFECTED.</span>
             </h2>
-            <p style={{ fontSize: '1.05rem', lineHeight: 2.1, color: '#e6e6e6', margin: '3rem 0', fontWeight: 300, maxWidth: '80%' }}>
-              Experience the eternal city of Ujjain with absolute privilege. From guaranteed Bhasma Aarti access to five-star hospitality, we orchestrate your spiritual journey with flawless precision and deep reverence.
+            <p style={{ fontSize: '1rem', lineHeight: 1.9, color: '#e6e6e6', margin: '2rem 0', fontWeight: 300, maxWidth: '90%' }}>
+              Experience the eternal city of Ujjain with absolute privilege. From guaranteed Bhasma Aarti access to five-star hospitality, we orchestrate your spiritual journey with flawless precision.
             </p>
             <MagneticButton>Reserve Your Journey</MagneticButton>
             
             <div className="trust-badges">
               <div className="trust-badge">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--gold)"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
-                5000+ Journeys Crafted
+                5000+ Journeys
               </div>
               <div className="trust-badge">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--gold)"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
-                Authorized Local Pandits
-              </div>
-              <div className="trust-badge">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="var(--gold)"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>
-                Premium Chauffeur Fleet
+                Elite Pandits
               </div>
             </div>
           </div>
@@ -1106,13 +1050,13 @@ export default function App() {
         <section style={{ height: '100vh', position: 'relative' }}>
           <div className="sanskrit-watermark font-sanskrit" style={{ left: '4vw', top: '20vh', opacity: 0.8 }}>दर्शन</div>
           <div className={`about-content ${getSectionClass(0.15, 0.35)}`} style={{
-            position: 'absolute', top: '50%', right: '10vw', transform: 'translateY(-50%)', width: '550px'
+            position: 'absolute', top: '50%', right: '10vw', transform: 'translateY(-50%)', maxWidth: '550px'
           }}>
-            <div className="glass-panel" style={{ padding: '4.5rem', borderTop: '2px solid var(--gold)' }}>
+            <div className="glass-panel" style={{ padding: '3.5rem', borderTop: '2px solid var(--gold)' }}>
               <div className="font-sanskrit" style={{ color: 'var(--gold)', fontSize: '1.4rem', marginBottom: '0.8rem' }}>सेवा</div>
-              <div className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2.2rem', marginBottom: '1.5rem', fontWeight: 600 }}>THE SANCTUM ACCESS</div>
-              <p style={{ color: '#cccccc', fontSize: '0.9rem', lineHeight: 1.9, marginBottom: '2.5rem', fontWeight: 300 }}>
-                We eliminate the friction of pilgrimage. Our concierge secures your presence before the deity while flawlessly managing every tier of luxury logistics.
+              <div className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2rem', marginBottom: '1.5rem', fontWeight: 600 }}>THE SANCTUM ACCESS</div>
+              <p style={{ color: '#cccccc', fontSize: '0.9rem', lineHeight: 1.8, marginBottom: '2rem', fontWeight: 300 }}>
+                We eliminate the friction of pilgrimage. Our concierge secures your presence before the deity while flawlessly managing logistics.
               </p>
               
               <div className="luxury-divider" />
@@ -1120,19 +1064,15 @@ export default function App() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                 <div className="service-item">
                   <div className="service-icon"><span className="font-cinzel">I</span></div>
-                  <div><div style={{ color: 'white', fontSize: '0.95rem', fontWeight: 500, letterSpacing: '2px' }}>VIP Mahakal Darshan</div><div style={{ color: '#999', fontSize: '0.75rem', marginTop: '4px', fontWeight: 300 }}>Expedited access and ceremonial entry.</div></div>
+                  <div><div style={{ color: 'white', fontSize: '0.9rem', fontWeight: 500, letterSpacing: '2px' }}>VIP Mahakal Darshan</div></div>
                 </div>
                 <div className="service-item">
                   <div className="service-icon"><span className="font-cinzel">II</span></div>
-                  <div><div style={{ color: 'white', fontSize: '0.95rem', fontWeight: 500, letterSpacing: '2px' }}>Bhasma Aarti Access</div><div style={{ color: '#999', fontSize: '0.75rem', marginTop: '4px', fontWeight: 300 }}>Confirmed placement for the sacred morning rituals.</div></div>
-                </div>
-                <div className="service-item">
-                  <div className="service-icon"><span className="font-cinzel">III</span></div>
-                  <div><div style={{ color: 'white', fontSize: '0.95rem', fontWeight: 500, letterSpacing: '2px' }}>Luxury Accommodations</div><div style={{ color: '#999', fontSize: '0.75rem', marginTop: '4px', fontWeight: 300 }}>Curated stays at Ujjain's most prestigious properties.</div></div>
+                  <div><div style={{ color: 'white', fontSize: '0.9rem', fontWeight: 500, letterSpacing: '2px' }}>Bhasma Aarti Guarantee</div></div>
                 </div>
                 <div className="service-item" style={{ border: 'none', paddingBottom: 0 }}>
-                  <div className="service-icon"><span className="font-cinzel">IV</span></div>
-                  <div><div style={{ color: 'white', fontSize: '0.95rem', fontWeight: 500, letterSpacing: '2px' }}>Dedicated Pandit Assistance</div><div style={{ color: '#999', fontSize: '0.75rem', marginTop: '4px', fontWeight: 300 }}>Personalized spiritual guidance and private poojas.</div></div>
+                  <div className="service-icon"><span className="font-cinzel">III</span></div>
+                  <div><div style={{ color: 'white', fontSize: '0.9rem', fontWeight: 500, letterSpacing: '2px' }}>Luxury Accommodations</div></div>
                 </div>
               </div>
             </div>
@@ -1142,63 +1082,48 @@ export default function App() {
         {/* 3. PACKAGES SECTION */}
         <section style={{ height: '100vh', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className={getSectionClass(0.35, 0.6)} style={{ width: '100%', padding: '0 6vw', zIndex: 2 }}>
-            <div style={{ textAlign: 'center', marginBottom: '5rem' }}>
-              <div className="font-sanskrit" style={{ color: 'var(--gold)', fontSize: '1.6rem', marginBottom: '1.2rem' }}>यात्रा</div>
-              <h3 className="font-cinzel text-glow" style={{ color: 'white', fontSize: '3.2rem', margin: 0, fontWeight: 700 }}>CURATED JOURNEYS</h3>
+            <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
+              <div className="font-sanskrit" style={{ color: 'var(--gold)', fontSize: '1.6rem', marginBottom: '1rem' }}>यात्रा</div>
+              <h3 className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2.5rem', margin: 0, fontWeight: 700 }}>CURATED JOURNEYS</h3>
             </div>
             
-            <div className="packages-container" style={{ display: 'flex', gap: '3rem', justifyContent: 'center' }}>
+            <div className="packages-container" style={{ display: 'flex', gap: '2rem', justifyContent: 'center' }}>
               {[
-                { title: 'The Devotee', subtitle: 'Essential Luxury', desc: 'VIP Mahakal Darshan, private local temple tour including Kaal Bhairav, and premium sedan transfers from Indore.', price: 'Enquire' },
-                { title: 'The Signature', subtitle: 'Premium Access', desc: 'Guaranteed Bhasma Aarti, VIP Darshan, luxurious 4-Star accommodations, and a dedicated chauffeur for 2 days.', price: 'Reserve', highlight: true },
-                { title: 'The Absolute', subtitle: 'Bespoke Devotion', desc: 'Exclusive VIP Darshan, 5-Star Suite, personal Pandit for private ceremonies, and total luxury itinerary management.', price: 'Bespoke' }
+                { title: 'The Devotee', subtitle: 'Essential', desc: 'VIP Darshan, local temple tour, premium sedan.', highlight: false },
+                { title: 'The Signature', subtitle: 'Premium', desc: 'Guaranteed Bhasma Aarti, VIP Darshan, 4-Star stay.', highlight: true },
+                { title: 'The Absolute', subtitle: 'Bespoke', desc: 'Exclusive access, 5-Star Suite, personal Pandit.', highlight: false }
               ].map((pkg, i) => (
                 <div key={i} className="glass-panel" style={{
-                  flex: 1, padding: '4.5rem 3.5rem', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
-                  borderTop: pkg.highlight ? '2px solid var(--gold)' : '1px solid var(--glass-border)',
-                  transform: pkg.highlight ? 'scale(1.05)' : 'scale(1)', zIndex: pkg.highlight ? 10 : 1
+                  flex: 1, padding: '3rem 2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
+                  borderTop: pkg.highlight ? '2px solid var(--gold)' : '1px solid var(--glass-border)'
                 }}>
-                  {pkg.highlight && <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', background: 'linear-gradient(90deg, #b8860b, #d4af6a, #b8860b)', color: 'black', padding: '6px 24px', fontSize: '0.65rem', fontWeight: 800, letterSpacing: '3px', borderBottomLeftRadius: '4px', borderBottomRightRadius: '4px' }}>RECOMMENDED</div>}
-                  <div className="font-cinzel" style={{ color: 'var(--gold)', fontSize: '2rem', marginBottom: '0.8rem', fontWeight: 600, marginTop: pkg.highlight ? '1.5rem' : '0' }}>{pkg.title}</div>
-                  <div style={{ color: '#b3b3b3', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '5px', marginBottom: '3rem', fontWeight: 500 }}>{pkg.subtitle}</div>
-                  <p style={{ color: '#cccccc', fontSize: '0.9rem', lineHeight: 1.9, marginBottom: 'auto', fontWeight: 300 }}>{pkg.desc}</p>
-                  <div className="luxury-divider" style={{ width: '50%' }} />
-                  <MagneticButton style={{ width: '100%', marginTop: '1.5rem', padding: '18px 0', fontSize: '0.75rem' }}>{pkg.price}</MagneticButton>
+                  <div className="font-cinzel" style={{ color: 'var(--gold)', fontSize: '1.5rem', marginBottom: '0.8rem', fontWeight: 600 }}>{pkg.title}</div>
+                  <div style={{ color: '#b3b3b3', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '3px', marginBottom: '2rem' }}>{pkg.subtitle}</div>
+                  <p style={{ color: '#cccccc', fontSize: '0.8rem', lineHeight: 1.8, marginBottom: 'auto' }}>{pkg.desc}</p>
+                  <MagneticButton style={{ width: '100%', marginTop: '2rem', padding: '15px 0' }}>Select</MagneticButton>
                 </div>
               ))}
             </div>
           </div>
         </section>
         
-        {/* 4. GALLERY / AESTHETIC PREVIEW */}
+        {/* 4. GALLERY PREVIEW */}
         <section style={{ height: '100vh', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div className={getSectionClass(0.6, 0.8)} style={{ width: '100%', padding: '0 6vw' }}>
-             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '4rem' }}>
-               <div>
-                 <div className="font-sanskrit" style={{ color: 'var(--gold)', fontSize: '1.4rem', marginBottom: '0.8rem' }}>अनुभव</div>
-                 <h3 className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2.8rem', margin: 0, fontWeight: 700 }}>THE AESTHETIC</h3>
-               </div>
-               <div style={{ color: '#999', fontSize: '0.75rem', letterSpacing: '3px', textTransform: 'uppercase', fontWeight: 500 }}>Immersive Splendor</div>
+             <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
+               <h3 className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2.5rem', margin: 0, fontWeight: 700 }}>THE AESTHETIC</h3>
              </div>
-             
-             <div className="gallery-container" style={{ display: 'flex', gap: '2.5rem', height: '45vh' }}>
+             <div className="gallery-container" style={{ display: 'flex', gap: '2rem', height: '40vh' }}>
                {[
-                 { label: 'Mahakaleshwar Jyotirlinga', desc: 'The eternal presence of time itself.', grad: 'linear-gradient(to top, rgba(7,5,4,1), rgba(7,5,4,0.1))' },
-                 { label: 'Five-Star Hospitality', desc: 'Uncompromised luxury and restful serenity.', grad: 'linear-gradient(to top, rgba(7,5,4,1), rgba(7,5,4,0.1))' },
-                 { label: 'Chauffeur Fleet', desc: 'Seamless, premium travel across the holy city.', grad: 'linear-gradient(to top, rgba(7,5,4,1), rgba(7,5,4,0.1))' }
+                 { label: 'Mahakaleshwar', desc: 'The eternal presence.' },
+                 { label: 'Hospitality', desc: 'Uncompromised luxury.' },
                ].map((item, i) => (
                  <div key={i} className="glass-panel gallery-card" style={{
-                   flex: 1, borderRadius: '6px', position: 'relative', overflow: 'hidden', cursor: 'pointer',
-                   background: `rgba(15, 10, 8, 0.3)`, border: '1px solid rgba(212, 175, 106, 0.15)'
+                   flex: 1, borderRadius: '6px', position: 'relative', background: `rgba(15, 10, 8, 0.3)`
                  }}>
-                    <div style={{ position: 'absolute', inset: 0, background: item.grad, zIndex: 1 }} />
-                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 1, opacity: 0.05, width: '60%' }}>
-                        <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" stroke="var(--gold)" strokeWidth="2" fill="none"/></svg>
-                    </div>
-                    <div style={{ position: 'absolute', bottom: '30px', left: '30px', right: '30px', zIndex: 2 }}>
-                      <div className="font-cinzel" style={{ color: 'white', fontSize: '1.4rem', fontWeight: 600, marginBottom: '8px' }}>{item.label}</div>
-                      <div style={{ color: '#aaa', fontSize: '0.8rem', fontWeight: 300, lineHeight: 1.5, marginBottom: '15px' }}>{item.desc}</div>
-                      <div style={{ display: 'inline-block', color: 'var(--gold)', fontSize: '0.65rem', letterSpacing: '3px', textTransform: 'uppercase', borderBottom: '1px solid var(--gold)', paddingBottom: '3px' }}>Discover</div>
+                    <div style={{ position: 'absolute', bottom: '20px', left: '20px', right: '20px', zIndex: 2 }}>
+                      <div className="font-cinzel" style={{ color: 'white', fontSize: '1.2rem', fontWeight: 600 }}>{item.label}</div>
+                      <div style={{ color: '#aaa', fontSize: '0.75rem', marginTop: '10px' }}>{item.desc}</div>
                     </div>
                  </div>
                ))}
@@ -1210,41 +1135,30 @@ export default function App() {
         <section style={{ height: '100vh', position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
           <div className={`booking-content ${getSectionClass(0.8, 1.1)}`} style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             
-            <div className="glass-panel" style={{ width: '100%', maxWidth: '650px', padding: '5rem', textAlign: 'center', marginBottom: '10vh', borderRadius: '6px' }}>
-              <div className="font-sanskrit" style={{ color: 'var(--gold)', fontSize: '2rem', marginBottom: '0.8rem' }}>आवाहन</div>
-              <h2 className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2.8rem', margin: '0 0 1.5rem 0', fontWeight: 700 }}>SECURE YOUR DARSHAN</h2>
-              <p style={{ color: '#cccccc', fontSize: '0.95rem', marginBottom: '4rem', fontWeight: 300, letterSpacing: '1px', lineHeight: 1.8 }}>Connect with our luxury concierges to curate your bespoke spiritual itinerary.</p>
+            <div className="glass-panel" style={{ width: '100%', maxWidth: '600px', padding: '3.5rem', textAlign: 'center', marginBottom: '8vh' }}>
+              <h2 className="font-cinzel text-glow" style={{ color: 'white', fontSize: '2.2rem', margin: '0 0 1rem 0' }}>SECURE YOUR DARSHAN</h2>
               
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2.5rem' }}>
-                <div style={{ display: 'flex', gap: '3rem' }}>
-                  <input type="text" placeholder="NAME" className="luxury-input" />
-                  <input type="text" placeholder="PHONE" className="luxury-input" />
-                </div>
-                <div style={{ position: 'relative' }}>
-                 <select className="luxury-input" defaultValue="" style={{ appearance: 'none', cursor: 'pointer', color: '#fff' }}>
-                    <option value="" disabled style={{ color: '#333' }}>SELECT EXPERIENCE</option>
-                    <option value="vip" style={{ color: '#333' }}>VIP Darshan & Stay</option>
-                    <option value="bhasma" style={{ color: '#333' }}>Bhasma Aarti Guarantee</option>
-                    <option value="full" style={{ color: '#333' }}>Complete Luxury Pilgrimage</option>
-                  </select>
-                  <div style={{ position: 'absolute', right: '10px', top: '15px', color: 'var(--gold)', pointerEvents: 'none' }}>▼</div>
-                </div>
-                <MagneticButton style={{ marginTop: '2rem', width: '100%' }}>Request Consultation</MagneticButton>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', marginTop: '2rem' }}>
+                <input type="text" placeholder="YOUR NAME" className="luxury-input" />
+                <input type="text" placeholder="YOUR PHONE" className="luxury-input" />
+                <select className="luxury-input" defaultValue="" style={{ appearance: 'none', color: '#fff' }}>
+                  <option value="" disabled>SELECT EXPERIENCE</option>
+                  <option value="vip">VIP Darshan & Stay</option>
+                  <option value="bhasma">Bhasma Aarti Guarantee</option>
+                </select>
+                <MagneticButton style={{ marginTop: '1rem', width: '100%' }}>Request Consultation</MagneticButton>
               </div>
             </div>
 
             {/* Premium Footer */}
-            <div style={{ width: '100%', borderTop: '1px solid rgba(212, 175, 106, 0.2)', padding: '4rem 6vw', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(to top, rgba(3,2,1,0.95), rgba(3,2,1,0))' }}>
+            <div style={{ width: '100%', borderTop: '1px solid rgba(212, 175, 106, 0.2)', padding: '3rem 6vw', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(3,2,1,0.9)' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div className="font-cinzel" style={{ color: 'var(--gold)', letterSpacing: '6px', fontSize: '1.2rem', fontWeight: 700 }}>UJJAIN BRAHMAN</div>
-                <div style={{ color: '#999', fontSize: '0.7rem', letterSpacing: '3px', textTransform: 'uppercase', fontWeight: 500 }}>Luxury Spiritual Experiences</div>
-                <div style={{ color: '#666', fontSize: '0.65rem', letterSpacing: '2px', marginTop: '15px' }}>Mahakaleshwar Temple Marg, Ujjain, Madhya Pradesh</div>
+                <div className="font-cinzel" style={{ color: 'var(--gold)', letterSpacing: '4px', fontSize: '1rem' }}>UJJAIN BRAHMAN</div>
+                <div style={{ color: '#666', fontSize: '0.6rem', letterSpacing: '2px' }}>Mahakaleshwar Temple Marg, Ujjain</div>
               </div>
-              <div className="font-sanskrit text-glow" style={{ color: 'var(--gold-dim)', fontSize: '4.5rem', opacity: 0.4 }}>ॐ</div>
               <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <div style={{ color: '#e6e6e6', fontSize: '0.85rem', letterSpacing: '3px', fontWeight: 500 }}>+91 99999 00000</div>
-                <div style={{ color: '#999', fontSize: '0.7rem', letterSpacing: '3px', textTransform: 'uppercase' }}>concierge@ujjainbrahman.com</div>
-                <div style={{ color: '#555', fontSize: '0.6rem', letterSpacing: '3px', marginTop: '15px', textTransform: 'uppercase' }}>© 2026 Ujjain Brahman. All Rights Reserved.</div>
+                <div style={{ color: '#e6e6e6', fontSize: '0.8rem', letterSpacing: '2px' }}>+91 99999 00000</div>
+                <div style={{ color: '#555', fontSize: '0.6rem', letterSpacing: '2px' }}>© 2026 Ujjain Brahman.</div>
               </div>
             </div>
           </div>
