@@ -565,11 +565,12 @@ class CinematicScene {
     const w = Math.max(1, window.innerWidth);
     const h = Math.max(1, window.innerHeight);
     const opts = {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      format: THREE.RGBAFormat,
-      type: THREE.HalfFloatType,
-    };
+  minFilter: THREE.LinearFilter,
+  magFilter: THREE.LinearFilter,
+  format: THREE.RGBAFormat,
+  type: THREE.HalfFloatType, // <--- THIS IS CRASHING YOUR PHONE
+};
+
     this.rtScene = new THREE.WebGLRenderTarget(w, h, opts);
     this.rtBright = new THREE.WebGLRenderTarget(w, h, opts);
     this.rtBlurA = new THREE.WebGLRenderTarget(w, h, opts);
